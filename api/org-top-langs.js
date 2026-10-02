@@ -109,6 +109,7 @@ async function getOrganizationLanguages(org) {
             name,
             size: 0,
             count: 0,
+            color: language.node.color || getLanguageColor(name),
           };
         }
 
@@ -159,6 +160,7 @@ export default async (req, res) => {
             name,
             size: 0,
             count: 0,
+            color: language.node.color || getLanguageColor(name),
           };
         }
 
