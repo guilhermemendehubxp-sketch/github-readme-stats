@@ -4,6 +4,44 @@ import { renderTopLanguages } from "../src/cards/top-languages.js";
 
 const GITHUB_GRAPHQL_URL = "https://api.github.com/graphql";
 
+const LANGUAGE_COLORS = {
+  JavaScript: "#f1e05a",
+  TypeScript: "#3178c6",
+  Python: "#3572A5",
+  Java: "#b07219",
+  "C++": "#f34b7d",
+  C: "#555555",
+  "C#": "#178600",
+  Go: "#00ADD8",
+  Rust: "#dea584",
+  PHP: "#4F5D95",
+  Ruby: "#701516",
+  Swift: "#F05138",
+  Kotlin: "#A97BFF",
+  Dart: "#00B4AB",
+  HTML: "#e34c26",
+  CSS: "#563d7c",
+  SCSS: "#c6538c",
+  Less: "#1d365d",
+  Shell: "#89e051",
+  Dockerfile: "#384d54",
+  SQL: "#e38c00",
+  Vue: "#41b883",
+  Svelte: "#ff3e00",
+  Lua: "#000080",
+  Perl: "#0298c3",
+  R: "#198CE7",
+  Haskell: "#5e5086",
+  Elixir: "#6e4a7e",
+  Scala: "#c22d40",
+  Groovy: "#e69f56",
+  PowerShell: "#012456",
+};
+
+function getLanguageColor(language) {
+  return LANGUAGE_COLORS[language] || "#858585";
+}
+
 const QUERY = `
   query OrganizationLanguages($org: String!, $cursor: String) {
     organization(login: $org) {
