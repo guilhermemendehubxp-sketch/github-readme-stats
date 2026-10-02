@@ -2,15 +2,66 @@
 
 import { renderTopLanguages } from "../src/cards/top-languages.js";
 
-const GITHUB_API = "https://api.github.com";
+const GITHUB_GRAPHQL_URL = "https://api.github.com/graphql";
 
-async function githubRequest(url) {
-  const response = await fetch(url, {
+const QUERY = `
+  query OrganizationLanguages($org: String!, $cursor: String) {
+    organization(login: $org) {
+      repositories(
+        first: 100
+        after: $cursor
+        isFork: false
+        orderBy: {
+          field: UPDATED_AT
+          direction: DESC
+        }
+      ) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+
+        nodes {
+          name
+          isArchived
+
+          languages(
+            first: 10
+            orderBy: {
+              field: SIZE
+              direction: DESC
+            }
+          ) {
+            edges {
+              size
+              node {
+                name
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+async function githubGraphQL(org, cursor = null) {
+  const response = await fetch(GITHUB_GRAPHQL_URL, {
+    method: "POST",
+
     headers: {
       Authorization: `Bearer ${process.env.PAT_1}`,
+      "Content-Type": "application/json",
       Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28",
     },
+
+    body: JSON.stringify({
+      query: QUERY,
+      variables: {
+        org,
+        cursor,
+      },
+    }),
   });
 
   if (!response.ok) {
@@ -19,39 +70,58 @@ async function githubRequest(url) {
     );
   }
 
-  return response.json();
-}
+  const result = await response.json();
 
-async function getRepositories(org) {
-  const repositories = [];
-
-  let page = 1;
-
-  while (true) {
-    const data = await githubRequest(
-      `${GITHUB_API}/orgs/${org}/repos?per_page=100&page=${page}&type=all`,
-    );
-
-    if (!data.length) {
-      break;
-    }
-
-    repositories.push(...data);
-
-    if (data.length < 100) {
-      break;
-    }
-
-    page++;
+  if (result.errors?.length) {
+    throw new Error(result.errors[0].message);
   }
 
-  return repositories;
+  return result.data.organization;
 }
 
-async function getLanguages(owner, repo) {
-  return githubRequest(
-    `${GITHUB_API}/repos/${owner}/${repo}/languages`,
-  );
+async function getOrganizationLanguages(org) {
+  const languages = {};
+
+  let cursor = null;
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const organization = await githubGraphQL(org, cursor);
+
+    if (!organization) {
+      throw new Error(
+        `Organization "${org}" not found or inaccessible`,
+      );
+    }
+
+    const repositories = organization.repositories;
+
+    for (const repository of repositories.nodes) {
+      if (!repository || repository.isArchived) {
+        continue;
+      }
+
+      for (const language of repository.languages.edges) {
+        const name = language.node.name;
+
+        if (!languages[name]) {
+          languages[name] = {
+            name,
+            size: 0,
+            count: 0,
+          };
+        }
+
+        languages[name].size += language.size;
+        languages[name].count += 1;
+      }
+    }
+
+    hasNextPage = repositories.pageInfo.hasNextPage;
+    cursor = repositories.pageInfo.endCursor;
+  }
+
+  return languages;
 }
 
 export default async (req, res) => {
@@ -59,7 +129,9 @@ export default async (req, res) => {
 
   try {
     if (!process.env.PAT_1) {
-      throw new Error("PAT_1 is not configured");
+      throw new Error(
+        "PAT_1 environment variable is not configured",
+      );
     }
 
     const organizations = (process.env.GITHUB_ORGS || "")
@@ -68,57 +140,71 @@ export default async (req, res) => {
       .filter(Boolean);
 
     if (!organizations.length) {
-      throw new Error("GITHUB_ORGS is not configured");
+      throw new Error(
+        "GITHUB_ORGS environment variable is not configured",
+      );
     }
 
-    const languageStats = {};
+    const languages = {};
 
     for (const organization of organizations) {
-      const repositories = await getRepositories(organization);
+      const organizationLanguages =
+        await getOrganizationLanguages(organization);
 
-      for (const repository of repositories) {
-        if (repository.fork || repository.archived) {
-          continue;
+      for (const [name, data] of Object.entries(
+        organizationLanguages,
+      )) {
+        if (!languages[name]) {
+          languages[name] = {
+            name,
+            size: 0,
+            count: 0,
+          };
         }
 
-        const languages = await getLanguages(
-          organization,
-          repository.name,
-        );
-
-        for (const [language, bytes] of Object.entries(languages)) {
-          if (!languageStats[language]) {
-            languageStats[language] = {
-              name: language,
-              size: 0,
-              count: 0,
-            };
-          }
-
-          languageStats[language].size += bytes;
-          languageStats[language].count++;
-        }
+        languages[name].size += data.size;
+        languages[name].count += data.count;
       }
     }
 
-    const topLanguages = Object.values(languageStats)
+    const sortedLanguages = Object.values(languages)
       .sort((a, b) => b.size - a.size)
       .reduce((result, language) => {
         result[language.name] = language;
         return result;
       }, {});
 
-    return res.send(
-      renderTopLanguages(topLanguages, {
-        custom_title: req.query.custom_title || "Professional Languages",
-        hide_title: req.query.hide_title === "true",
-        hide_border: req.query.hide_border === "true",
-        card_width: parseInt(req.query.card_width, 10),
-        theme: req.query.theme || "buefy",
-        layout: req.query.layout || "compact",
-        langs_count: req.query.langs_count || "6",
-      }),
+    const svg = renderTopLanguages(sortedLanguages, {
+      custom_title:
+        req.query.custom_title ||
+        "Professional Languages",
+
+      hide_title:
+        req.query.hide_title === "true",
+
+      hide_border:
+        req.query.hide_border === "true",
+
+      card_width: req.query.card_width
+        ? parseInt(req.query.card_width, 10)
+        : undefined,
+
+      theme:
+        req.query.theme || "buefy",
+
+      layout:
+        req.query.layout || "compact",
+
+      langs_count:
+        req.query.langs_count || "6",
+    });
+
+    res.setHeader(
+      "Cache-Control",
+      "public, max-age=21600, s-maxage=21600",
     );
+
+    return res.status(200).send(svg);
   } catch (error) {
     console.error(error);
 
